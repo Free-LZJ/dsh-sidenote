@@ -3,7 +3,7 @@
  * 附件 rail。自 SideChatPanel.tsx 拆出（WI-02 主战场，面板壳只留编排）。
  */
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
-import { IconPaperclipOutline16, IconSendOutline16, IconStopFill16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconPaperclipOutline16, IconSendOutline16, IconStopFill16 } from '../host/icons.ts'
 import type { Context, SessionFace } from '../host/contracts.ts'
 import type { Composer } from './composer.ts'
 import { ModelMenu } from './ModelMenu.tsx'

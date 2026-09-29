@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { IconCloseOutline16, IconListPenOutline16, IconShareOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCloseOutline16, IconListPenOutline16, IconShareOutline16 } from '../host/icons.ts'
 import type { InputZone } from '../host/contracts.ts'
 import type { AnnotationStore } from './model.ts'
 import type { ReflowStore } from '../reflow.ts'

@@ -7,7 +7,8 @@
  * 懒加载：首次打开才拉目录（catalog RPC 有成本）；切换后本地标签立即更新。
  */
 import { useState } from 'react'
-import { IconCheckOutline16, IconChevronDownOutline14, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCheckOutline16, IconChevronDownOutline14 } from '../host/icons.ts'
 import type { Context, SessionModelsResult } from '../host/contracts.ts'
 import { listModels, switchModel } from './lifecycle.ts'
 import { t } from '../locales.ts'

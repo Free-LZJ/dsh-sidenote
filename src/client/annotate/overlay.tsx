@@ -15,8 +15,9 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Component } from 'react'
 import type { ReactNode } from 'react'
-import { IconCheckOutline16, IconTrashOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconCheckOutline16, IconTrashOutline16 } from '../host/icons.ts'
 import type { Context } from '../host/contracts.ts'
+import { currentSessionIdOf } from '../host/currentSession.ts'
 import { sideChatBridge } from '../bridge.ts'
 import { t } from '../locales.ts'
 import { useLocaleTick } from '../locale-tick.ts'
@@ -99,7 +100,10 @@ function AnnotateOverlayInner({ ctx, store, controller }: OverlayProps): ReactNo
     useCallback((cb: () => void) => ctx.sessions.list.subscribe(cb), [ctx]),
     () => ctx.sessions.list.getSnapshot(),
   )
-  const currentSessionId = sessionList.current ?? ''
+  // 0.1.7 的 SessionListState 已无 current——双源（list.current / DOM
+  // data-conversation-session）。uSES 订阅仍保留，驱动会话切换后的重读。
+  void sessionList
+  const currentSessionId = currentSessionIdOf(ctx)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [sideDraft, setSideDraft] = useState<SideDraftState | null>(null)
   // Bumped by scroll/resize/DOM mutation so badge/highlight geometry follows.

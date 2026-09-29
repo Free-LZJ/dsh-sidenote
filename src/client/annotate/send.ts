@@ -32,6 +32,7 @@
  * `assistant/attempt` 空流、缺 `turn/end`、界面上却没有任何错误提示。
  */
 import type { Context, ConversationService, SessionId, SessionInput } from '../host/contracts.ts'
+import { currentSessionIdOf } from '../host/currentSession.ts'
 import { buildProtocolBlock } from './format.ts'
 import type { AnnotationStore } from './model.ts'
 import { buildReflowBlock, tryInjectReflows, type ReflowItem, type ReflowStore } from '../reflow.ts'
@@ -86,13 +87,7 @@ export function installSendInterceptor(ctx: Context, store: AnnotationStore, ref
     swallowTimer = window.setTimeout(clearSwallow, 2_000)
   }
 
-  const currentSessionId = (): string => {
-    try {
-      return ctx.sessions.list.getSnapshot().current ?? ''
-    } catch {
-      return ''
-    }
-  }
+  const currentSessionId = (): string => currentSessionIdOf(ctx)
 
   /**
    * 异步提交（Workitem_06）：inject 尝试（有界等待，见 tryInjectReflows）

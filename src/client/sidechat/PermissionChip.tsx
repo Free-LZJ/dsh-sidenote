@@ -7,7 +7,8 @@
  * （默认表 workspace-write/danger-full-access，dsh-permission-presets 实证）。
  */
 import { useMemo, useState, useSyncExternalStore } from 'react'
-import { IconChevronDownOutline14, IconInspectOutline12, Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Menu, type MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconChevronDownOutline14, IconInspectOutline12 } from '../host/icons.ts'
 import type { SessionFace } from '../host/contracts.ts'
 import { t } from '../locales.ts'
 import { useLocaleTick } from '../locale-tick.ts'

@@ -25,6 +25,7 @@ import {
   sideTabTitle,
 } from './model.ts'
 import { readInputDraft, resolveSessionInput } from './composer.ts'
+import { currentSessionIdOf } from '../host/currentSession.ts'
 import { betterSidebarOf, directNativeLeg, focusNativeTab, lastLiveSideChat, liveSideChatsOf, markSideChatOpening, nativeSidebarHost, nativeTabShell, sideChatOpening } from './native.ts'
 import { readSideChatMeta, sideChatMetasOf, writeSideChatMeta } from './metaStore.ts'
 import { sideChatTitleOf } from './identity.ts'
@@ -85,7 +86,8 @@ export function openOrFocusSideChat(ctx: Context, sessionId: string, draftText?:
 function openOrFocusDirect(ctx: Context, sessionId: string, draftText?: string): boolean {
   try {
     // 会话守卫：只操作在屏会话（openTab 本就只写在屏会话，提前拒掉省一次铸造）。
-    if (ctx.sessions.list.getSnapshot().current !== sessionId) return false
+    // 0.1.7 的列表已无 current 字段——双源（list.current / DOM）。
+    if (currentSessionIdOf(ctx) !== sessionId) return false
     const hasDraft = draftText !== undefined && draftText !== ''
 
     // 1. 存活面板（已挂载登记）：草稿直达 composer/相位门。
@@ -242,7 +244,7 @@ function createSideChatLegacy(ctx: Context, sessionId: string, draftText?: strin
 export function sideChatTargetTitle(ctx: Context, sessionId: string): string | undefined {
   try {
     if (directLeg(ctx)) {
-      if (ctx.sessions.list.getSnapshot().current !== sessionId) return undefined
+      if (currentSessionIdOf(ctx) !== sessionId) return undefined
       const live = lastLiveSideChat(sessionId)
       if (live !== undefined) return live.readTitle()
       const metas = sideChatMetasOf(sessionId)
@@ -274,7 +276,7 @@ export function sideChatTargetTitle(ctx: Context, sessionId: string): string | u
 export function reopenSideChat(ctx: Context, sessionId: string, childId: string, opts?: { title?: string, topic?: string }): boolean {
   if (directLeg(ctx)) {
     try {
-      if (ctx.sessions.list.getSnapshot().current !== sessionId) return false
+      if (currentSessionIdOf(ctx) !== sessionId) return false
       // 单实例（held）：有存活实例时重开无意义（弹层侧此时本就不列重开项）。
       if (sideChatMetasOf(sessionId).length > 0) return false
       sidebarRightOf(ctx)!.openTab(SIDE_TAB_TYPE, {

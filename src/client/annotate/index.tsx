@@ -22,11 +22,15 @@ import { installSendInterceptor } from './send.ts'
 import { installBubbleSurgery } from './bubble.ts'
 import type { ReflowStore } from '../reflow.ts'
 
+import { currentSessionIdOf } from '../host/currentSession.ts'
+
+export { currentSessionIdOf }
+
 export function registerAnnotations(ctx: Context, reflow: ReflowStore): void {
   ctx.effect(() => {
     try {
       const store = createAnnotationStore()
-      const controller = createSelectionController(() => ctx.sessions.list.getSnapshot().current ?? '')
+      const controller = createSelectionController(() => currentSessionIdOf(ctx))
 
       // The overlay root: toolbar + badges + highlight + editor + sent viewer.
       const host = document.createElement('div')

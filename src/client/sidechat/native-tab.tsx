@@ -18,7 +18,7 @@
  * 的 multiple（0.1.6+）放开。
  */
 import { Component, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react'
-import { IconNewChatOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconNewChatOutline16 } from '../host/icons.ts'
 import type {
   Context,
   NativeTabFrameworkProps,

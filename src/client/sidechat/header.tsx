@@ -9,8 +9,9 @@
  */
 import { useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { IconNewChatOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconNewChatOutline16 } from '../host/icons.ts'
 import type { Context } from '../host/contracts.ts'
+import { currentSessionIdOf } from '../host/currentSession.ts'
 import { canForkFrom } from './model.ts'
 import { openOrFocusSideChat } from './open.ts'
 import { t } from '../locales.ts'
@@ -24,8 +25,11 @@ function HeaderSideButton({ ctx }: { ctx: Context }): ReactNode {
     (notify) => ctx.sessions.list.subscribe(notify),
     () => ctx.sessions.list.getSnapshot(),
   )
-  const sessionId = listSnap.current
-  if (sessionId === undefined || !canForkFrom(ctx, sessionId)) return null
+  // 0.1.7 的 SessionListState 已无 current——双源（list.current / DOM
+  // data-conversation-session）。uSES 订阅保留以驱动会话切换后的重读。
+  void listSnap
+  const sessionId = currentSessionIdOf(ctx)
+  if (sessionId === '' || !canForkFrom(ctx, sessionId)) return null
 
   return (
     <button

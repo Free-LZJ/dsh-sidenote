@@ -4,7 +4,8 @@
  * 面板壳只留编排）。渲染规则：MessageRow 全族 memo（字段值比较器）。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { DisclosureRow, IconBranchOutline16, IconCheckOutline16, IconNewChatOutline16, IconShareOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { DisclosureRow, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconBranchOutline16, IconCheckOutline16, IconNewChatOutline16, IconShareOutline16 } from '../host/icons.ts'
 import type { ChatMessage } from '../chat/transcript.ts'
 import { partitionInherited } from '../chat/transcript.ts'
 import { ToolCard } from '../chat/ToolCard.tsx'

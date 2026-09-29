@@ -15,8 +15,9 @@
  * 另安装：annotate 桥（sideChatBridge.current，WI-03 联动缝）与 /side
  * 斜杠命令（spike，popupSelect 形态，不可行时降级为只有 Tab 入口）。
  */
-import { IconNewChatOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconNewChatOutline16 } from '../host/icons.ts'
 import type { Context } from '../host/contracts.ts'
+import { currentSessionIdOf } from '../host/currentSession.ts'
 import { sideChatBridge } from '../bridge.ts'
 import type { ReflowStore } from '../reflow.ts'
 import { SideChatPanel } from './SideChatPanel.tsx'
@@ -63,8 +64,8 @@ export function registerSideChat(ctx: Context, reflow: ReflowStore): void {
           // live registry（当前会话——openTab 的会话守卫保证 state 属在屏会话）。
           const titles = collectSideTabs(state).map(tab => tab.title)
           if (nativeSidebarHost(ctx)) {
-            const current = ctx.sessions.list.getSnapshot().current
-            if (current !== undefined) {
+            const current = currentSessionIdOf(ctx)
+            if (current !== '') {
               for (const live of liveSideChatsOf(current)) titles.push(live.readTitle())
             }
           }

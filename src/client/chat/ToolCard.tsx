@@ -10,6 +10,13 @@ import { useSyncExternalStore, type ReactNode } from 'react'
 import {
   DisclosureRow,
   DiffBlock,
+  JsonTree,
+  ReadBlock,
+  SearchBlock,
+  TerminalBlock,
+  WebBlock,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import {
   IconChecklistOutline14,
   IconCodeOutline16,
   IconCordisPluginOutline14,
@@ -20,12 +27,7 @@ import {
   IconRightUpOutline16,
   IconSearchOutline16,
   IconTrashOutline16,
-  JsonTree,
-  ReadBlock,
-  SearchBlock,
-  TerminalBlock,
-  WebBlock,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+} from '../host/icons.ts'
 import type { ToolCardModel, ToolCallKind } from './cards.ts'
 import type { FoldStore } from './viewState.ts'
 import { t } from '../locales.ts'

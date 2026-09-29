@@ -6,7 +6,7 @@
  * off-face 探测纪律：session.open()、store.update 均为运行时可达但契约不
  * 保证的面——就地 feature-check + 吞错降级，并登记进 host/probes.ts。
  */
-import type { Context, ConversationSnapshot, ModelSelection, RemoteSessionModelFace, SessionBinding, SessionFace, SessionModelsResult, UiConversationLike } from '../host/contracts.ts'
+import type { Context, ConversationSnapshot, ModelSelection, RemoteSessionModelFace, SessionBinding, SessionFace, SessionModelsResult, SessionReference, UiConversationLike } from '../host/contracts.ts'
 import { parseSideChatMeta, type SideChatMeta } from './model.ts'
 import { readTab, sidebarRightOf } from './open.ts'
 import { betterSidebarOf, directNativeLeg, rootContext } from './native.ts'
@@ -14,6 +14,16 @@ import { readSideChatMeta, writeSideChatMeta } from './metaStore.ts'
 import { sideChatTitleOf } from './identity.ts'
 import { contentTextOf } from '../chat/transcript.ts'
 import { SNAPSHOT_BLOCK_MARK } from './snapshot.ts'
+
+/** 0.1.7+ 显式持有 Session generation；旧宿主无 retain 时保持原行为。 */
+export function retainSession(ctx: Context, sessionId: string, signal?: AbortSignal): SessionReference | undefined {
+  const retain = ctx.sessions.retain
+  if (typeof retain !== 'function') return undefined
+  return retain.call(ctx.sessions, sessionId, {
+    source: 'dsh-sidenote',
+    ...(signal === undefined ? {} : { signal }),
+  })
+}
 
 /**
  * 主线忙碌判定（busy-fork 路由）。2026-09-22 实证的宿主 fork 语义缺口：fork
@@ -55,9 +65,9 @@ export function isPurgingInheritedTurn(childId: string): boolean {
 }
 
 /** 读父会话当前最大节点 seq（折叠边界；读不到不阻断）。 */
-function readMaxNodeSeq(ctx: Context, sessionId: string): number | undefined {
+function readMaxNodeSeq(ctx: Context, sessionId: string, binding?: SessionBinding): number | undefined {
   try {
-    const source = chatSourceOf(ctx, ctx.sessions.binding(sessionId))
+    const source = chatSourceOf(ctx, binding ?? ctx.sessions.binding(sessionId))
     const snap = source?.getLegacy()
     let max = -1
     for (const node of snap?.nodes ?? []) {
@@ -178,16 +188,25 @@ export function armInheritedTurnPurge(ctx: Context, childId: string, parentSessi
   if (purgingChildren.has(childId)) return
   purgingChildren.add(childId)
   let settled = false
+  let retained: SessionReference | undefined
   const offs: Array<() => void> = []
+  const releaseRetained = (): void => {
+    retained?.release()
+    retained = undefined
+  }
   const markPurged = (): void => {
     updateTabMeta(ctx, parentSessionId, tabId, (cur) => ({ ...cur, inheritedPurged: true }))
   }
-  const disarm = (): void => {
-    if (settled) return
+  const stop = (): boolean => {
+    if (settled) return false
     settled = true
     for (const off of offs) off()
     purgingChildren.delete(childId)
-    markPurged()
+    releaseRetained()
+    return true
+  }
+  const disarm = (): void => {
+    if (stop()) markPurged()
   }
   /**
    * 子会话投影里「fork 后新增」的用户消息文本（无 = ''）：seq ≤ fork 边界的
@@ -195,7 +214,7 @@ export function armInheritedTurnPurge(ctx: Context, childId: string, parentSessi
    */
   const freshUserText = (): string => {
     try {
-      const source = chatSourceOf(ctx, ctx.sessions.binding(childId))
+      const source = chatSourceOf(ctx, retained?.binding ?? ctx.sessions.binding(childId))
       const nodes = source?.getLegacy()?.nodes ?? []
       for (let i = nodes.length - 1; i >= 0; i -= 1) {
         const n = nodes[i] as { kind?: unknown; content?: unknown; seq?: unknown }
@@ -212,14 +231,23 @@ export function armInheritedTurnPurge(ctx: Context, childId: string, parentSessi
     return ''
   }
   try {
-    const binding = ctx.sessions.binding(childId)
+    // 0.1.7 的 binding 是纯借用；监护必须自持引用，才能早于面板挂载订阅，
+    // 并在面板关闭后继续守住尚未被认领的遗传 turn。
+    retained = retainSession(ctx, childId)
+    if (retained !== undefined) {
+      void retained.ready.catch((error: unknown) => {
+        if (!stop()) return
+        console.warn('[dsh-sidenote] 遗传 turn 监护打开子会话失败:', childId, error)
+      })
+    }
+    const binding = retained?.binding ?? ctx.sessions.binding(childId)
     const session = binding?.session
     const cancelFace = session as unknown as { cancel?: () => Promise<unknown> } | undefined
     const chat = binding === undefined ? undefined : chatSourceOf(ctx, binding)
     if (session === undefined || typeof cancelFace?.cancel !== 'function' || chat === undefined) {
       // cancel/chat 面缺席（老宿主）→ 降级：监护不做，行为退回修复前（告警留痕）。
       console.warn('[dsh-sidenote] 子会话 cancel/chat 面缺席，遗传 turn 监护未启用:', childId, 'session:', session !== undefined, 'chat:', chat !== undefined)
-      purgingChildren.delete(childId)
+      stop()
       return
     }
 
@@ -239,17 +267,26 @@ export function armInheritedTurnPurge(ctx: Context, childId: string, parentSessi
       if (expectedPrefix !== undefined && !text.startsWith(expectedPrefix)) { disarm(); return }
       settled = true
       for (const off of offs) off()
-      void cancelChild.call(session)
+      let cancellation: Promise<unknown>
+      try {
+        cancellation = cancelChild.call(session)
+      } catch (error) {
+        cancellation = Promise.reject(error)
+      }
+      void cancellation
         .catch((error: unknown) => console.warn('[dsh-sidenote] 遗传 turn 取消失败:', error))
         .finally(() => {
           purgingChildren.delete(childId)
           markPurged()
+          // 两个收尾任务各自持有短引用；启动后即可释放监护的长引用。
           advanceBoundaryPastTail(ctx, parentSessionId, tabId, childId)
           reconcileChildQueueAfterCancel(ctx, childId, expectedPrefix)
+          releaseRetained()
         })
     }))
-  } catch {
-    purgingChildren.delete(childId)
+  } catch (error) {
+    stop()
+    console.warn('[dsh-sidenote] 遗传 turn 监护初始化失败:', error)
   }
 }
 
@@ -263,23 +300,37 @@ export function armInheritedTurnPurge(ctx: Context, childId: string, parentSessi
  * 两者皆无（主线积压、用户的快手第二条）→ 留在队列里不动（保守不删用户文字）。
  */
 function reconcileChildQueueAfterCancel(ctx: Context, childId: string, expectedPrefix: string | undefined): void {
+  let retained: SessionReference | undefined
+  try { retained = retainSession(ctx, childId) } catch { /* binding 回退仍可工作 */ }
   let attempts = 0
+  let finished = false
+  const finish = (): void => {
+    if (finished) return
+    finished = true
+    retained?.release()
+    retained = undefined
+  }
   const tick = (): void => {
     attempts += 1
     try {
-      const session = ctx.sessions.binding(childId)?.session as {
+      const session = (retained?.binding ?? ctx.sessions.binding(childId))?.session as {
         getSnapshot?: () => unknown
         updateQueue?: (itemId: string, action: { kind: 'remove' }) => Promise<unknown>
         prompt?: (content: unknown, mode: 'queue' | 'steer') => Promise<unknown>
       } | undefined
       const snap = session?.getSnapshot?.() as { running?: boolean; queue?: ReadonlyArray<{ id?: unknown; text?: unknown; content?: unknown }> } | null
-      if (session === undefined || snap === undefined || snap === null || typeof session.updateQueue !== 'function' || typeof session.prompt !== 'function') return
+      if (session === undefined || snap === undefined || snap === null || typeof session.updateQueue !== 'function' || typeof session.prompt !== 'function') {
+        finish()
+        return
+      }
       if (snap.running === true) {
         if (attempts < 8) setTimeout(tick, 400)
+        else finish()
         return
       }
       const updateQueue = session.updateQueue.bind(session)
       const prompt = session.prompt.bind(session)
+      const tasks: Promise<unknown>[] = []
       for (const item of snap.queue ?? []) {
         if (typeof item?.id !== 'string') continue
         const text = typeof item.text === 'string' ? item.text : contentTextOf(item.content)
@@ -288,15 +339,17 @@ function reconcileChildQueueAfterCancel(ctx: Context, childId: string, expectedP
         if (!isLeak && !isUserReal) continue
         const itemId = item.id
         const content = item.content
-        void updateQueue(itemId, { kind: 'remove' })
+        tasks.push(updateQueue(itemId, { kind: 'remove' })
           .then(() => {
             if (!isUserReal) return undefined
             return prompt(content, 'queue')
           })
-          .catch((error: unknown) => console.warn('[dsh-sidenote] 取消后队列和解失败:', error))
+          .catch((error: unknown) => console.warn('[dsh-sidenote] 取消后队列和解失败:', error)))
       }
+      if (tasks.length === 0) finish()
+      else void Promise.allSettled(tasks).then(finish)
     } catch {
-      // 面缺席不阻断。
+      finish()
     }
   }
   setTimeout(tick, 300)
@@ -309,24 +362,35 @@ function reconcileChildQueueAfterCancel(ctx: Context, childId: string, expectedP
  * turn 会短暂可见，属可接受降级）。
  */
 function advanceBoundaryPastTail(ctx: Context, parentSessionId: string, tabId: string, childId: string): void {
+  let retained: SessionReference | undefined
+  try { retained = retainSession(ctx, childId) } catch { /* binding 回退仍可工作 */ }
   let attempts = 0
+  let finished = false
+  const finish = (): void => {
+    if (finished) return
+    finished = true
+    retained?.release()
+    retained = undefined
+  }
   const tick = (): void => {
     attempts += 1
     try {
-      const binding = ctx.sessions.binding(childId)
+      const binding = retained?.binding ?? ctx.sessions.binding(childId)
       const running = (binding?.session.getSnapshot() as { running?: boolean } | null)?.running === true
-      const max = running ? undefined : readMaxNodeSeq(ctx, childId)
+      const max = running ? undefined : readMaxNodeSeq(ctx, childId, binding)
       if (max !== undefined) {
         updateTabMeta(ctx, parentSessionId, tabId, (cur) => ({
           ...cur,
           boundarySeq: Math.max(cur.boundarySeq ?? -1, max),
         }))
+        finish()
         return
       }
     } catch {
       // 重试。
     }
     if (attempts < 8) setTimeout(tick, 400)
+    else finish()
   }
   setTimeout(tick, 300)
 }
@@ -381,11 +445,17 @@ export async function forkAndRegister(ctx: Context, parentSessionId: string, tab
     ...(snapshotOnly ? { snapshotOnly: true } : {}),
     ...(leakedPromptPrefix !== undefined ? { leakedPromptPrefix } : {}),
   }))
-  // 归档失败残留可见（无 unarchive API），不阻断面板。
-  try {
-    await owner.workspaces.archiveSession(forked)
-  } catch (error) {
-    console.warn('[dsh-sidenote] 归档侧边会话失败（会话列表可能短暂可见）:', error)
+  // 归档隐藏出会话列表——但 0.1.7 起 ArchivedSessionGate 把「已归档」当作
+  // 拒跑模型步的硬闸门（agent/pre-step reject → turn/end blocked，实测侧边
+  // 消息 200 后 30ms 内被 block）。判据：workspace 面有 unarchiveSession
+  // （0.1.7 才新增）。有闸门的宿主上子会话保持可见，让位给可用性。
+  if (typeof owner.workspaces.unarchiveSession !== 'function') {
+    // 归档失败残留可见（无 unarchive API），不阻断面板。
+    try {
+      await owner.workspaces.archiveSession(forked)
+    } catch (error) {
+      console.warn('[dsh-sidenote] 归档侧边会话失败（会话列表可能短暂可见）:', error)
+    }
   }
   // fork 继承 agent preset 但不继承模型选择——读主会话当前模型并同步到
   // 子会话（best-effort，失败则子会话用宿主默认模型，面板标签如实回退）。
@@ -486,6 +556,20 @@ export function ensurePanelOpen(store: unknown): void {
   } catch {
     // 手动展开即可。
   }
+}
+
+/**
+ * 0.1.7 自愈：旧版本插件把侧边子会话归档隐藏，ArchivedSessionGate 会拒跑它
+ * 的模型步（turn/end blocked）。面板挂载时对 childId 幂等 unarchive；
+ * 旧宿主无此 API 时 no-op。
+ */
+export function unarchiveSideSession(ctx: Context, sessionId: string | undefined): void {
+  if (sessionId === undefined) return
+  const unarchive = ctx.workspaces.unarchiveSession
+  if (typeof unarchive !== 'function') return
+  void unarchive.call(ctx.workspaces, sessionId).catch(() => {
+    // 未归档/已恢复 → 静默；其他失败不阻断面板。
+  })
 }
 
 /**

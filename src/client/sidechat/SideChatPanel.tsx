@@ -13,13 +13,12 @@
  * 否则消息流永远为空（client-runtime 只为 staged 会话开窗的已知偏差）。
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { IconNewChatOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context, SessionFace, TabComponentProps } from '../host/contracts.ts'
 import { useComposer, type Composer } from './composer.ts'
 import { appendDraftText, clearPendingDraft, parseSideChatMeta, phaseOf } from './model.ts'
 import { transcriptOf } from '../chat/transcript.ts'
 import { EmptyState, MessageList, StateScreen } from './rows.tsx'
-import { armInheritedTurnPurge, chatSourceOf, closeSideTab, ensurePanelOpen, forkAndRegister, openSessionWindow, readModelName, setSideChatTopic, updateTabMeta } from './lifecycle.ts'
+import { armInheritedTurnPurge, chatSourceOf, closeSideTab, ensurePanelOpen, forkAndRegister, openSessionWindow, readModelName, retainSession, setSideChatTopic, unarchiveSideSession, updateTabMeta } from './lifecycle.ts'
 import { topicOf } from './identity.ts'
 import { buildMainlineSnapshot } from './snapshot.ts'
 import { directNativeLeg, registerLiveSideChat } from './native.ts'
@@ -52,6 +51,7 @@ export function SideChatPanel(props: TabComponentProps & { reflow: ReflowStore }
   const meta = parseSideChatMeta(tab.meta)
   const childId = meta.childId
   const [forkError, setForkError] = useState<string | null>(null)
+  const [, refreshBinding] = useState(0)
   const forkStarted = useRef(false)
 
   // 绑定丢失自愈（审查 M-2）：meta 记录被清（多窗口清扫/HMR/occurrence
@@ -87,6 +87,34 @@ export function SideChatPanel(props: TabComponentProps & { reflow: ReflowStore }
     return () => { cancelled = true; controller.abort() }
   }, [ctx, scope.sessionId, tab.id, childId])
 
+  // 0.1.7 起 binding() 只借用已 retain 的 generation。面板为整个挂载期
+  // 自持一份引用；旧宿主没有 retain 时，继续依赖原有的列表隐式 binding。
+  useEffect(() => {
+    if (childId === undefined) return
+    let acquired: ReturnType<typeof retainSession>
+    try {
+      acquired = retainSession(ctx, childId)
+    } catch (error) {
+      console.warn('[dsh-sidenote] 侧边会话 retain 失败:', childId, error)
+      return
+    }
+    if (acquired === undefined) return
+    const reference = acquired
+    let released = false
+    // 0.1.7 自愈：旧版本归档过的侧边子会话会被 ArchivedSessionGate 拒跑。
+    unarchiveSideSession(ctx, childId)
+    // retain 同步 materialize binding；补一次渲染即可进入 chat 相位并先订阅
+    // opening 中的事件。ready 只用于吞接入失败，不能等它才开始订阅。
+    refreshBinding((value) => value + 1)
+    void reference.ready.catch((error: unknown) => {
+      if (!released) console.warn('[dsh-sidenote] 侧边会话打开失败:', childId, error)
+    })
+    return () => {
+      released = true
+      reference.release()
+    }
+  }, [ctx, childId])
+
   // ── 列表订阅：phase（就绪与否）+ byId（在列与否）驱动「会话已不存在」判定 ──
   const listSnap = useSyncExternalStore(
     useCallback((notify: () => void) => ctx.sessions.list.subscribe(notify), [ctx]),
@@ -96,20 +124,18 @@ export function SideChatPanel(props: TabComponentProps & { reflow: ReflowStore }
   const binding = childId === undefined ? undefined : ctx.sessions.binding(childId)
   const session = binding?.session
 
-  // 绑定即开窗口（幂等）：拉历史尾页 + 开始接收实时事件。
-  useEffect(() => {
-    openSessionWindow(session)
-  }, [session])
-
-  // ── 遗传 turn 监护的重挂载补齐（Delivery_04）：首开路径的监护在
-  // forkAndRegister 里 arm；若监护 settle 前关了 tab（子会话尚未 boot），
-  // 重开时子会话此刻才 boot、泄漏 turn 起跑——靠 inheritedPurged 标记判定
-  // 重新 arm（armInheritedTurnPurge 幂等，首开路径已 arm 则不重复）。 ──
+  // 遗传 turn 监护的重挂载补齐。保留 session 就绪门，确保无 retain 的旧宿主
+  // 在列表加载并 materialize binding 后重试；声明在 open effect 前避免先开窗。
   useEffect(() => {
     if (meta.forkedMidTurn !== true || meta.inheritedPurged === true) return
     if (childId === undefined || session === undefined) return
     armInheritedTurnPurge(ctx, childId, scope.sessionId, tab.id, meta.leakedPromptPrefix, meta.boundarySeq)
   }, [ctx, childId, session, meta.forkedMidTurn, meta.inheritedPurged, meta.leakedPromptPrefix, meta.boundarySeq, scope.sessionId, tab.id])
+
+  // 绑定即开窗口（幂等）：拉历史尾页 + 开始接收实时事件。
+  useEffect(() => {
+    openSessionWindow(session)
+  }, [session])
 
   const phase = phaseOf({
     childId,

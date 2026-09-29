@@ -180,6 +180,13 @@ export interface SessionBinding {
   session: SessionFace
 }
 
+/** 0.1.7+ 的独立、引用计数式会话所有权；每次 retain 对应一次 release。 */
+export interface SessionReference {
+  readonly binding: SessionBinding
+  readonly ready: Promise<SessionBinding>
+  release(): void
+}
+
 /**
  * 0.1.2 的会话内容读取面（off-face，惰性探测；权威：W00-fork-replay-012.md）。
  * 0.1.2 拆包后 Session 快照只剩控制面，nodes/partial/runningCalls 移入
@@ -193,6 +200,8 @@ export interface UiConversationLike {
 export interface SessionsService {
   list: ObservableSnapshot<SessionListSnapshot>
   fork(opts: ForkOptions): Promise<SessionId>
+  /** 0.1.7+：显式持有 generation；旧宿主缺席时继续使用 binding 的旧语义。 */
+  retain?(id: SessionId, options: { source: string; signal?: AbortSignal }): SessionReference
   binding(id: SessionId): SessionBinding | undefined
   scope(id: SessionId): Context | undefined
   open(id: SessionId): void
@@ -202,6 +211,11 @@ export interface SessionsService {
 
 export interface WorkspacesService {
   archiveSession(sessionId: SessionId): Promise<void>
+  /**
+   * 0.1.7+ 新增；同时是 ArchivedSessionGate 的版本判据——该宿主把「已归档」
+   * 当作拒跑模型步的硬闸门（turn/end blocked），归档侧边子会话前必须判空。
+   */
+  unarchiveSession?(sessionId: SessionId): Promise<void>
 }
 
 // ── conversation input machine (dsh-client-ui-conversation; lazy via ctx.get) ─

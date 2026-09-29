@@ -14,10 +14,31 @@ import {
 } from '../src/client/annotate/format.ts'
 import { ASSISTANT_KIND, isEligibleSelection } from '../src/client/annotate/selection.ts'
 import { BADGE_SPREAD_STEP, spreadBadgePoint } from '../src/client/annotate/anchor.ts'
+import { currentSessionIdOf } from '../src/client/annotate/index.tsx'
+import type { Context } from '../src/client/host/contracts.ts'
 
 function draft(sessionId: string, text: string, note = ''): AnnotationDraft {
   return { sessionId, anchorKey: 'k1', text, anchorText: text, occurrence: 0, note }
 }
+
+describe('currentSessionIdOf（0.1.5 current / 0.1.7 DOM 双源）', () => {
+  const ctxWithCurrent = (current: unknown): Context => ({
+    sessions: { list: { getSnapshot: () => ({ current }) } },
+  } as unknown as Context)
+
+  it('0.1.5 的列表 current 优先', () => {
+    expect(currentSessionIdOf(ctxWithCurrent('s-main'))).toBe('s-main')
+  })
+
+  it('0.1.7 无 current 字段且 node 环境无 DOM → 空串（不抛错）', () => {
+    expect(currentSessionIdOf(ctxWithCurrent(undefined))).toBe('')
+  })
+
+  it('list 抛错时降级为空串（不阻断划选监听）', () => {
+    const ctx = { sessions: { list: { getSnapshot: () => { throw new Error('gone') } } } } as unknown as Context
+    expect(currentSessionIdOf(ctx)).toBe('')
+  })
+})
 
 describe('annotation store', () => {
   it('assigns per-session numbers in creation order, starting at 1', () => {

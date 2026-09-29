@@ -8,7 +8,7 @@
  * 防误伤用户自己的首个 turn）。
  */
 import { describe, expect, it, vi } from 'vitest'
-import { armInheritedTurnPurge, forkAndRegister, isPurgingInheritedTurn, sessionBusyOf } from '../src/client/sidechat/lifecycle.ts'
+import { armInheritedTurnPurge, forkAndRegister, isPurgingInheritedTurn, retainSession, sessionBusyOf } from '../src/client/sidechat/lifecycle.ts'
 import type { Context } from '../src/client/host/contracts.ts'
 
 interface Env {
@@ -19,6 +19,8 @@ interface Env {
   updateTab: ReturnType<typeof vi.fn>
   childUpdateQueue: ReturnType<typeof vi.fn>
   childPrompt: ReturnType<typeof vi.fn>
+  retain: ReturnType<typeof vi.fn>
+  retainedCount: () => number
   /** 子会话队列现状（剔除路径的观测口）。 */
   childQueue: () => readonly { id: string }[]
   /** 翻转子会话 running 并通知订阅者（模拟遗传 turn 开跑）。 */
@@ -44,6 +46,12 @@ function makeEnv(opts: {
   childInheritedNodes?: unknown[]
   /** 子会话队列里既有的 pending 项（模拟遗传的泄漏消息；QueuedMessage 形态）。 */
   childQueue?: Array<{ id: string; text: string }>
+  /** 模拟 0.1.7：child binding 仅在显式 retain 后存在。 */
+  retainRequired?: boolean
+  /** 模拟 retain 成功但初始 open 失败。 */
+  retainReadyRejects?: boolean
+  /** 模拟 0.1.7：workspaces 带 unarchiveSession（ArchivedSessionGate 判据）。 */
+  hasUnarchive?: boolean
 }): Env {
   childSeq += 1
   const childId = `child-${childSeq}`
@@ -100,6 +108,24 @@ function makeEnv(opts: {
     // prompt 面（和解重投用）。
     prompt: vi.fn(async () => ({ ok: true, value: { accepted: true } })),
   }
+  const childBinding = { session: childSession }
+  let retainedCount = 0
+  const retain = vi.fn((id: string) => {
+    if (id !== childId && id !== createdId) throw new Error(`unknown session: ${id}`)
+    retainedCount += 1
+    let released = false
+    return {
+      binding: childBinding,
+      ready: opts.retainReadyRejects === true
+        ? Promise.reject(new Error('open failed'))
+        : Promise.resolve(childBinding),
+      release: () => {
+        if (released) return
+        released = true
+        retainedCount -= 1
+      },
+    }
+  })
   const betterSidebar = {
     version: '0.18.0',
     updateTab,
@@ -108,16 +134,22 @@ function makeEnv(opts: {
   const ctx = {
     get: (name: string) => (name === 'betterSidebar' ? betterSidebar : undefined),
     sessions: {
+      ...(opts.retainRequired === true ? { retain } : {}),
       binding: (id: string) => {
         if (id === 'parent-1') return { session: parentSession }
-        if (id === childId || id === createdId) return { session: childSession }
+        if (id === childId || id === createdId) {
+          return opts.retainRequired === true && retainedCount === 0 ? undefined : childBinding
+        }
         return undefined
       },
       fork,
       create,
       list: { getSnapshot: () => ({ current: 'parent-1', byId: {} }), subscribe: () => () => {} },
     },
-    workspaces: { archiveSession: vi.fn(async () => undefined) },
+    workspaces: {
+      archiveSession: vi.fn(async () => undefined),
+      ...(opts.hasUnarchive === true ? { unarchiveSession: vi.fn(async () => undefined) } : {}),
+    },
     connection: { api: { sessions: {
       models: vi.fn(async () => ({ result: { ok: false } })),
       selectModel: vi.fn(async () => ({ result: { ok: false } })),
@@ -131,6 +163,8 @@ function makeEnv(opts: {
     updateTab,
     childUpdateQueue: childSession.updateQueue,
     childPrompt: childSession.prompt,
+    retain,
+    retainedCount: () => retainedCount,
     childQueue: () => childState.queue,
     flipChildRunning: () => {
       childState.running = true
@@ -158,6 +192,24 @@ describe('sessionBusyOf（主线忙碌判定）', () => {
   })
 })
 
+describe('retainSession（0.1.7 显式 generation 所有权）', () => {
+  it('旧宿主无 retain 时保持原 binding 路径', () => {
+    const env = makeEnv({ parentRunning: false })
+    expect(retainSession(env.ctx, currentChildId())).toBeUndefined()
+  })
+
+  it('新宿主按插件来源持有并成对释放', () => {
+    const env = makeEnv({ parentRunning: false, retainRequired: true })
+    const id = currentChildId()
+    const reference = retainSession(env.ctx, id)
+    expect(env.retain).toHaveBeenCalledWith(id, { source: 'dsh-sidenote' })
+    expect(reference?.binding.session).toBeDefined()
+    expect(env.retainedCount()).toBe(1)
+    reference?.release()
+    expect(env.retainedCount()).toBe(0)
+  })
+})
+
 describe('forkAndRegister：busy fork 路径', () => {
   it('主线空闲 → 直接 fork，无 forkedMidTurn 标记，无监护', async () => {
     const env = makeEnv({ parentRunning: false })
@@ -169,6 +221,16 @@ describe('forkAndRegister：busy fork 路径', () => {
     expect(isPurgingInheritedTurn(currentChildId())).toBe(false)
   })
 
+  it('归档判据：0.1.5（无 unarchiveSession）归档隐藏；0.1.7（有）跳过归档避免 gate block', async () => {
+    const legacy = makeEnv({ parentRunning: false })
+    await forkAndRegister(legacy.ctx, 'parent-1', 'tab1')
+    expect(legacy.ctx.workspaces.archiveSession).toHaveBeenCalledTimes(1)
+
+    const gated = makeEnv({ parentRunning: false, hasUnarchive: true })
+    await forkAndRegister(gated.ctx, 'parent-1', 'tab1')
+    expect(gated.ctx.workspaces.archiveSession).not.toHaveBeenCalled()
+  })
+
   it('主线忙碌 → 立即 fork（不等待）+ meta 打 forkedMidTurn + 监护就位', async () => {
     const env = makeEnv({ parentRunning: true })
     await expect(forkAndRegister(env.ctx, 'parent-1', 'tab1')).resolves.toBe(currentChildId())
@@ -177,6 +239,55 @@ describe('forkAndRegister：busy fork 路径', () => {
     // 监护已就位（等遗传 turn 开跑）。
     expect(isPurgingInheritedTurn(currentChildId())).toBe(true)
     expect(env.cancel).not.toHaveBeenCalled()
+  })
+
+  it('0.1.7 retain-only binding：监护自持引用，解除时释放', async () => {
+    const env = makeEnv({ parentRunning: true, parentInflightText: '主线任务', retainRequired: true })
+    await forkAndRegister(env.ctx, 'parent-1', 'tab1')
+    expect(env.retain).toHaveBeenCalledWith(currentChildId(), { source: 'dsh-sidenote' })
+    expect(env.retainedCount()).toBe(1)
+    expect(isPurgingInheritedTurn(currentChildId())).toBe(true)
+
+    env.setChildUserText('用户自己的侧边消息')
+    env.flipChildRunning()
+    expect(env.cancel).not.toHaveBeenCalled()
+    expect(isPurgingInheritedTurn(currentChildId())).toBe(false)
+    expect(env.retainedCount()).toBe(0)
+  })
+
+  it('0.1.7 监护 opening 失败时释放引用且不误标已清除', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const env = makeEnv({ parentRunning: true, retainRequired: true, retainReadyRejects: true })
+      await forkAndRegister(env.ctx, 'parent-1', 'tab1')
+      await Promise.resolve()
+      expect(isPurgingInheritedTurn(currentChildId())).toBe(false)
+      expect(env.retainedCount()).toBe(0)
+      expect(env.lastMeta()?.inheritedPurged).toBeUndefined()
+      expect(warn).toHaveBeenCalledWith(
+        '[dsh-sidenote] 遗传 turn 监护打开子会话失败:',
+        currentChildId(),
+        expect.any(Error),
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('0.1.7 cancel 路径：监护与两个异步收尾引用最终全部释放', async () => {
+    vi.useFakeTimers()
+    try {
+      const env = makeEnv({ parentRunning: true, parentInflightText: '主线任务', retainRequired: true })
+      await forkAndRegister(env.ctx, 'parent-1', 'tab1')
+      env.setChildUserText('主线任务（遗传）')
+      env.flipChildRunning()
+      await vi.runAllTimersAsync()
+      expect(env.cancel).toHaveBeenCalledTimes(1)
+      expect(isPurgingInheritedTurn(currentChildId())).toBe(false)
+      expect(env.retainedCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('遗传 turn 开跑（running 翻 true）→ 立即 cancel 且监护一次性解除并标 inheritedPurged', async () => {
