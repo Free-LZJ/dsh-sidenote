@@ -222,6 +222,7 @@ function AnnotateOverlayInner({ ctx, store, controller }: OverlayProps): ReactNo
       />
       {editingAnnotation !== undefined && editor !== null && (
         <AnnotationEditor
+          key={`${editor.annotationId}:${editor.mode}`}
           annotation={editingAnnotation}
           mode={editor.mode}
           x={editor.x}
