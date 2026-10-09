@@ -103,10 +103,17 @@ cat > "$PROFILE_DIR/package.json" <<EOF
   }
 }
 EOF
-# 0.1.1 的 web bundle 禁用 HMR，但 CLI 仍无条件 watchUserPatches；启动时
-# 启用已有的 HMR 行，避免其动态创建服务的时序问题。后续宿主使用 startup。
+# 0.1.1 的 CLI 仍无条件 watchUserPatches；其 HMR 依赖允许安装后来移除
+# registerConfig 的 1.0.19。测试 profile 固定兼容版本并提前启用该服务。
 case "$($DSH_CMD --version)" in
   0.1.1-*)
+    node - "$PROFILE_DIR/package.json" <<'JS'
+const fs = require('node:fs')
+const file = process.argv[2]
+const profile = JSON.parse(fs.readFileSync(file, 'utf8'))
+profile.dependencies['@deepseek-ai/cordis-plugin-hmr'] = '1.0.16'
+fs.writeFileSync(file, JSON.stringify(profile, null, 2) + '\n')
+JS
     cat > "$PROFILE_DIR/cordis.patch.yml" <<'EOF'
 - id: hmr
   disabled: false

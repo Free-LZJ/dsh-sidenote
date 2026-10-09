@@ -92,6 +92,16 @@ jobs:
       - name: Install dsh CLI (pinned)
         run: npm install -g @deepseek-ai/dsh@${{ matrix.dsh-version }}
 
+      - name: Check host sandbox module
+        if: matrix.dsh-version == '0.1.5-rc.2'
+        run: |
+          DSH_RUNTIME_DIR="$(npm root -g)/@deepseek-ai/dsh" node --input-type=module <<'JS'
+          import { createRequire } from 'node:module'
+          import { pathToFileURL } from 'node:url'
+          const resolve = createRequire(`${process.env.DSH_RUNTIME_DIR}/package.json`).resolve
+          await import(pathToFileURL(resolve('@deepseek-ai/dsh-sandbox-local')).href)
+          JS
+
       - name: Build and pack the npm tarball
         run: pnpm build && pnpm pack
 
