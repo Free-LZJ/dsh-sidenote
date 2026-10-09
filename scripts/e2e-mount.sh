@@ -71,6 +71,11 @@ cleanup() {
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
+  if [ "$code" -ne 0 ] && [ -f "$WEB_LOG" ]; then
+    mkdir -p "$ROOT/test-results"
+    sed -E 's/(\?token=)[A-Za-z0-9_-]+/\1[redacted]/g' "$WEB_LOG" > "$ROOT/test-results/host-web.log"
+    cat "$ROOT/test-results/host-web.log" >&2
+  fi
   if [ -z "${KEEP_HOME:-}" ]; then
     rm -rf "$SCRATCH"
   else
@@ -183,6 +188,6 @@ else
   SPEC_FILTER="mount.e2e.ts"
 fi
 DSH_E2E_URL="$URL" DSH_E2E_WORKSPACE="$WORKSPACE_DIR" DSH_E2E_SEED_SESSION="$SEED_SESSION_ID" \
-  pnpm exec playwright test "$SPEC_FILTER" ${GREP_FILTER:+--grep "$GREP_FILTER"}
+  pnpm exec playwright test "$SPEC_FILTER" annotations.e2e.ts ${GREP_FILTER:+--grep "$GREP_FILTER"}
 
 say "通过：dsh-sidenote 挂载到真实 DSH 后无头渲染未崩溃"
