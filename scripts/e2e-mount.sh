@@ -103,7 +103,19 @@ cat > "$PROFILE_DIR/package.json" <<EOF
   }
 }
 EOF
-printf '[]\n' > "$PROFILE_DIR/cordis.patch.yml"
+# 0.1.1 的 web bundle 禁用 HMR，但 CLI 仍无条件 watchUserPatches；启动时
+# 启用已有的 HMR 行，避免其动态创建服务的时序问题。后续宿主使用 startup。
+case "$($DSH_CMD --version)" in
+  0.1.1-*)
+    cat > "$PROFILE_DIR/cordis.patch.yml" <<'EOF'
+- id: hmr
+  disabled: false
+  config:
+    root: []
+EOF
+    ;;
+  *) printf '[]\n' > "$PROFILE_DIR/cordis.patch.yml" ;;
+esac
 cat > "$PROFILE_DIR/pnpm-workspace.yaml" <<'EOF'
 packages:
   - .
