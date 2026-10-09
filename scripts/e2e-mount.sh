@@ -103,17 +103,20 @@ cat > "$PROFILE_DIR/package.json" <<EOF
   }
 }
 EOF
-# 0.1.1 的 CLI 仍无条件 watchUserPatches；其 HMR 依赖允许安装后来移除
-# registerConfig 的 1.0.19。测试 profile 固定兼容版本并提前启用该服务。
-case "$($DSH_CMD --version)" in
-  0.1.1-*)
-    node - "$PROFILE_DIR/package.json" <<'JS'
+# 老宿主的运行依赖放到 profile 自己的解析路径：0.1.1 的 HMR 必须保留
+# registerConfig；0.1.5 的 sandbox-local 仅列在 CLI devDependencies 中。
+DSH_VERSION="$($DSH_CMD --version)"
+node - "$PROFILE_DIR/package.json" "$DSH_VERSION" <<'JS'
 const fs = require('node:fs')
 const file = process.argv[2]
+const version = process.argv[3]
 const profile = JSON.parse(fs.readFileSync(file, 'utf8'))
-profile.dependencies['@deepseek-ai/cordis-plugin-hmr'] = '1.0.16'
+if (version.startsWith('0.1.1-')) profile.dependencies['@deepseek-ai/cordis-plugin-hmr'] = '1.0.16'
+if (version === '0.1.5-rc.2') profile.dependencies['@deepseek-ai/dsh-sandbox-local'] = version
 fs.writeFileSync(file, JSON.stringify(profile, null, 2) + '\n')
 JS
+case "$DSH_VERSION" in
+  0.1.1-*)
     cat > "$PROFILE_DIR/cordis.patch.yml" <<'EOF'
 - id: hmr
   disabled: false
@@ -133,6 +136,7 @@ autoInstallPeers: false
 allowBuilds:
   node-pty: true
   protobufjs: true
+  koffi: true
 
 minimumReleaseAgeExclude:
   - dsh-better-sidebar

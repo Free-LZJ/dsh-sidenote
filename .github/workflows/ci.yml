@@ -92,18 +92,6 @@ jobs:
       - name: Install dsh CLI (pinned)
         run: npm install -g @deepseek-ai/dsh@${{ matrix.dsh-version }}
 
-      - name: Install and verify legacy sandbox dependency
-        if: matrix.dsh-version == '0.1.5-rc.2'
-        run: |
-          # 该版的全局安装未将此 bundle 依赖放到 CLI 可解析的路径。
-          npm install -g @deepseek-ai/dsh-sandbox-local@${{ matrix.dsh-version }}
-          DSH_RUNTIME_DIR="$(npm root -g)/@deepseek-ai/dsh" node --input-type=module <<'JS'
-          import { createRequire } from 'node:module'
-          import { pathToFileURL } from 'node:url'
-          const resolve = createRequire(`${process.env.DSH_RUNTIME_DIR}/package.json`).resolve
-          await import(pathToFileURL(resolve('@deepseek-ai/dsh-sandbox-local')).href)
-          JS
-
       - name: Build and pack the npm tarball
         run: pnpm build && pnpm pack
 
