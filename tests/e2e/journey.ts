@@ -23,7 +23,16 @@ export async function dismissOnboarding(page: Page): Promise<void> {
   for (let round = 0; round < 10; round++) {
     const buttons = page.getByRole('button', { name: names })
     if (await buttons.count() === 0) break
-    await buttons.last().click()
+    // A registered local provider can complete onboarding automatically while
+    // its disabled Continue is on screen. Wait for enabled OR genuinely gone.
+    await expect.poll(() => buttons.evaluateAll(elements => {
+      const last = elements.at(-1)
+      return last === undefined ? 'gone' : last instanceof HTMLButtonElement && !last.disabled ? 'ready' : 'loading'
+    }), { timeout: 15_000 }).not.toBe('loading')
+    if (await buttons.count() === 0) break
+    try { await buttons.last().click({ timeout: 2_000 }) } catch (error) {
+      if (await buttons.count() !== 0) throw error
+    }
   }
   await expect(page.locator('[class*="_mask_"]')).toHaveCount(0, { timeout: 15_000 })
 }
@@ -33,8 +42,20 @@ export async function openSeedSession(page: Page): Promise<void> {
   if (!seed) throw new Error('Missing DSH_E2E_SEED_SESSION')
   const open = page.getByRole('button', { name: /^(Open sidebar|打开侧栏)$/ }).first()
   if (await open.isVisible()) await open.click()
+  // Wait for the session list before deciding which row identity exists. A
+  // zero count on the first frame must not choose the legacy title fallback.
+  const titled = page.getByRole('treeitem').filter({ hasText: 'Side chat plugin review' })
+  await expect(titled.first()).toBeAttached({ timeout: 30_000 })
   const byId = page.locator(`[role="treeitem"][data-row-key="session:${seed}"]`)
-  const rows = await byId.count() > 0 ? byId : page.getByRole('treeitem').filter({ hasText: 'Side chat plugin review' })
+  // Native workspace lists show a limited recent subset. Previous real forks
+  // can push the seed behind Show more; expand instead of choosing a child
+  // with the same inherited title.
+  const overflow = page.locator('button[data-row-key^="overflow:"][aria-expanded="false"]')
+  if (await byId.count() === 0 && await overflow.count() > 0) {
+    await overflow.first().click()
+    await expect(byId).toBeAttached({ timeout: 30_000 })
+  }
+  const rows = await byId.count() > 0 ? byId : titled
   // Legacy children are archived; an ambiguous legacy title must fail loudly.
   await expect(rows).toHaveCount(1)
   await rows.getByText('Side chat plugin review', { exact: true }).click()
@@ -82,7 +103,7 @@ export async function openSideChat(page: Page): Promise<string> {
 }
 
 /** Only the isolated host's durable log is read, never the user's DSH_HOME. */
-export function userMessagesOf(sessionId: string): string[] {
+export function userMessageContentsOf(sessionId: string): Array<Array<{ type: string; text?: string }>> {
   const home = process.env.DSH_E2E_HOME
   if (!home) throw new Error('Missing isolated DSH_E2E_HOME')
   const projects = join(home, 'sessions')
@@ -98,8 +119,11 @@ export function userMessagesOf(sessionId: string): string[] {
     const file = files[0]!
     const bytes = readFileSync(join(dir, file))
     const events = decodeLog(bytes, file.endsWith('.zstd')).trim().split('\n').map(line => JSON.parse(line))
-    return events.filter(e => e.type === 'user/message' || e.type === 'user/steering').map(e =>
-      (e.data.content ?? []).filter((b: { type: string }) => b.type === 'text').map((b: { text: string }) => b.text).join('\n'))
+    return events.filter(e => e.type === 'user/message' || e.type === 'user/steering').map(e => e.data.content ?? [])
   }
   return []
+}
+
+export function userMessagesOf(sessionId: string): string[] {
+  return userMessageContentsOf(sessionId).map(content => content.filter(block => block.type === 'text').map(block => block.text ?? '').join('\n'))
 }
