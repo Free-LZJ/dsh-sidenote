@@ -173,6 +173,11 @@ node -e '
 ' "$PROFILE_DIR/package.json" "$BS_VERSION"
 say "挂载已注册（BS_VERSION=${BS_VERSION}）"
 
+if [ -n "${DSH_E2E_CAPABILITY_FAULT:-}" ]; then
+  cp -R "$ROOT/tests/fixtures/capability-fault" "$SCRATCH/capability-fault"
+  $DSH_CMD plugin --profile web add "file:$SCRATCH/capability-fault"
+fi
+
 # 只读 inventory fixture 从真实 host registry 的 bundle 路径读取版本。
 # 不从本仓 devDependencies 或 CLI 版本推断运行组件版本。
 # Outside the repository package boundary: this loose module has no dsh.client.
@@ -231,16 +236,9 @@ say "dsh web 就绪：${URL%%\?*}（pid ${SERVER_PID}）"
 # 统一移进 tests/e2e/host.ts 的 createHostApi()/hostRpc()（lane beforeAll
 # 调用），0.1.1/0.1.2 双方言自动选择。
 
-# 步骤 5：Playwright 无头渲染 lane（无-BS 档跑直连冒烟，BS 档跑全量 journey）
-say "运行 Playwright 无头渲染 lane..."
-if [ "$BS_VERSION" = "none" ]; then
-  SPEC_FILTER="mount-direct.e2e.ts"
-else
-  SPEC_FILTER="mount.e2e.ts"
-fi
-DSH_E2E_URL="$URL" DSH_E2E_WORKSPACE="$WORKSPACE_DIR" DSH_E2E_SEED_SESSION="$SEED_SESSION_ID" DSH_E2E_HOME="$DSH_HOME" \
-  pnpm exec playwright test "$SPEC_FILTER" annotations.e2e.ts core.e2e.ts running.e2e.ts side-selection.e2e.ts ${GREP_FILTER:+--grep "$GREP_FILTER"}
-
+# Verify the mounted artifact before exercising UI; a reused file dependency
+# can otherwise keep an older tarball with the same package version.
+assert_inventory() {
 node - "$SCRATCH/host-inventory.json" "$SCRATCH/runtime-inventory.json" <<'JS'
 const fs = require('node:fs')
 const [file, runtimeFile] = process.argv.slice(2)
@@ -254,5 +252,20 @@ if (inventory.runtimePackages['dsh-sidenote'].clientSha256 !== inventory.expecte
 if (inventory.requestedBetterSidebar !== null && inventory.runtimePackages['dsh-better-sidebar']?.version !== inventory.requestedBetterSidebar) throw new Error('Mounted better-sidebar version mismatch')
 fs.writeFileSync(file, JSON.stringify(inventory, null, 2) + '\n')
 JS
+
+}
+assert_inventory
+
+# 步骤 5：Playwright 无头渲染 lane（无-BS 档跑直连冒烟，BS 档跑全量 journey）
+say "运行 Playwright 无头渲染 lane..."
+if [ "$BS_VERSION" = "none" ]; then
+  SPEC_FILTER="mount-direct.e2e.ts"
+else
+  SPEC_FILTER="mount.e2e.ts"
+fi
+DSH_E2E_URL="$URL" DSH_E2E_WORKSPACE="$WORKSPACE_DIR" DSH_E2E_SEED_SESSION="$SEED_SESSION_ID" DSH_E2E_HOME="$DSH_HOME" \
+  pnpm exec playwright test "$SPEC_FILTER" annotations.e2e.ts core.e2e.ts running.e2e.ts side-selection.e2e.ts diagnostics.e2e.ts ${GREP_FILTER:+--grep "$GREP_FILTER"}
+
+assert_inventory
 
 say "通过：真实宿主 journey；版本记录在 test-results/host-inventory.json"
