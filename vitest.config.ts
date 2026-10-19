@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.spec.{ts,tsx}'],
     environment: 'node',
+    setupFiles: ['vitest.setup.ts'],
     server: {
       deps: {
         // ToolCard 冒烟测（renderToString）需要真实 primitives；内联进
